@@ -1039,17 +1039,22 @@ function updateDataSourceUI(success, fail, total){
                         String(now.getSeconds()).padStart(2,'0');
 }
 
-// ④ 数据合理性自检（全部产品，规模/业绩为 0 不算异常）
+// ④ 数据合理性自检（仅对真正异常的字段报警，避免噪音）
 function runSanityChecks(){
   PRODUCTS.forEach(p=>{
     const issues = [];
-    if(p.sharpe!==0 && (p.sharpe<-3 || p.sharpe>10)) issues.push('Sharpe='+p.sharpe+' 超出常规区间[-3,10]');
-    if((p.maxDrawdown||0)>0) issues.push('最大回撤为正值（应为绝对值越小越稳健）');
-    if(p.calmar<0 || p.calmar>200) issues.push('Calmar 异常');
-    if((p.scale||0)<0) issues.push('规模为负');
-    if(p.annualReturn>60 || p.annualReturn<-50) issues.push('年化超出常规区间');
-    // 关键：业绩字段存在但规模为 0 = 数据不一致
-    if(!p.scale && (p.sharpe||p.annualReturn||p.maxDrawdown)) issues.push('有业绩数据但规模缺失');
+    // 取真实可用数据（perfMap 优先）
+    const pf = DS.perfMap[p.code] || {};
+    const ar = pf.y1!=null ? pf.y1 : p.annualReturn;
+    const scale = pf.scale!=null ? pf.scale : p.scale;
+
+    if(p.sharpe!==0 && p.sharpe!=null && (p.sharpe<-5 || p.sharpe>15)) issues.push('Sharpe='+p.sharpe+' 超出常规区间[-5,15]');
+    if((p.maxDrawdown||0) > 0) issues.push('最大回撤为正值（应为负数）');
+    if(p.calmar < -10 || p.calmar > 500) issues.push('Calmar 异常');
+    if(scale!=null && scale < 0) issues.push('规模为负');
+    // 真极端的年化才报警：[-80, 300]
+    if(ar != null && (ar > 300 || ar < -80)) issues.push('近一年收益超出极端区间 [-80%, 300%]');
+    // 「规模缺失」不再当作异常 —— pingzhongdata 的 sScale 字段对被动 ETF / 部分基金不披露，是常态
     p._sanityIssues = issues;
   });
 }
@@ -1332,6 +1337,11 @@ function renderBubble(){
   let xMax = 0;
   data.forEach(x=>{ const v=Math.abs(x.dd); if(v>xMax) xMax=v; });
   xMax = Math.ceil(Math.max(xMax,20)/5)*5;
+  // Y 轴上限：取中位数附近的 1.5×95 分位，避免被极端值拉伸；最大不超过 60%
+  const ys = data.map(x=>x.y1).sort((a,b)=>a-b);
+  const p95 = ys.length ? ys[Math.floor(ys.length*0.95)] : 0;
+  const yMax = Math.min(60, Math.max(25, Math.ceil(p95/5)*5 + 5));
+  const yMin = Math.min(-5, Math.floor((ys[0]||0)/5)*5);
 
   const series = INVEST_HIERARCHY.map(h=>{
     const items = data.filter(x=>x.p.l1===h.l1).map(x=>{
@@ -1358,9 +1368,9 @@ function renderBubble(){
       nameTextStyle:{color:'#7A8294',fontSize:11},
       axisLine:{lineStyle:{color:'#232B3F'}}, axisLabel:{color:'#7A8294',formatter:v=>v+'%'},
       splitLine:{lineStyle:{color:'#1A2032',type:'dashed'}}, min:0, max:xMax },
-    yAxis:{ type:'value', name:'↑ 年化收益', nameTextStyle:{color:'#7A8294',fontSize:11,padding:[0,0,0,-30]},
+    yAxis:{ type:'value', name:'↑ 近一年收益（>60% 截断显示）', nameTextStyle:{color:'#7A8294',fontSize:11,padding:[0,0,0,-30]},
       axisLine:{lineStyle:{color:'#232B3F'}}, axisLabel:{color:'#7A8294',formatter:v=>v+'%'},
-      splitLine:{lineStyle:{color:'#1A2032',type:'dashed'}} },
+      splitLine:{lineStyle:{color:'#1A2032',type:'dashed'}}, min:yMin, max:yMax },
     tooltip:{ backgroundColor:'rgba(15,20,34,0.96)', borderColor:'#232B3F', borderWidth:1,
       textStyle:{color:'#E5E7EB',fontSize:12}, padding:12,
       formatter: p=>{
