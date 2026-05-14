@@ -738,6 +738,61 @@ PRODUCTS.forEach(p => {
 });
 
 // ============================================================
+// 行业主题词典（用于竞品对比的"风格对齐"打分）
+// 机构销售视角：医药基金必须对医药、量化必须对量化、红利必须对红利。
+// 识别口径：产品名 + 业绩比较基准 + description 三路扫描关键词。
+// ============================================================
+const INDUSTRY_THEMES = [
+  { key:'medical',    label:'医药医疗',  keywords:['医药','医疗','健康','生物','创新药','医美','大健康','疫苗','医疗器械'] },
+  { key:'consumer',   label:'消费',      keywords:['消费','食品','饮料','白酒','零售','服装','家电','品牌'] },
+  { key:'tech',       label:'科技TMT',   keywords:['科技','TMT','互联网','软件','人工智能','AI','信息技术','计算机','数字经济','智能'] },
+  { key:'semi',       label:'半导体电子',keywords:['半导体','芯片','集成电路','电子','5G','通信'] },
+  { key:'newenergy',  label:'新能源',    keywords:['新能源','锂电','光伏','储能','电池','新能源车','智能汽车','汽车'] },
+  { key:'military',   label:'军工国防',  keywords:['军工','国防','航空','航天','军民融合'] },
+  { key:'finance',    label:'金融',      keywords:['银行','金融','券商','保险','非银'] },
+  { key:'realestate', label:'地产基建',  keywords:['地产','房地产','基建','建筑'] },
+  { key:'dividend',   label:'红利策略',  keywords:['红利','股息','分红','高股息'] },
+  { key:'value',      label:'价值蓝筹',  keywords:['价值','蓝筹','低估','深度价值'] },
+  { key:'growth',     label:'成长',      keywords:['成长','优选','优势','质量','优胜'] },
+  { key:'quant',      label:'量化',      keywords:['量化','指数增强','smart','beta','多因子','增强'] },
+  { key:'esg',        label:'ESG碳中和', keywords:['ESG','碳中和','低碳','可持续','绿色','环保','气候'] },
+  { key:'pension',    label:'养老FOF',   keywords:['养老','目标日期','目标风险','TDF','TRF','稳健'] },
+  { key:'overseas',   label:'海外港股',  keywords:['港股','海外','美股','纳斯达克','标普','全球','QDII','沪港深','中概','亚太'] },
+  { key:'hs300',      label:'宽基-沪深300',keywords:['沪深300','HS300'] },
+  { key:'csi500',     label:'宽基-中证500',keywords:['中证500','CSI500'] },
+  { key:'csi1000',    label:'宽基-中证1000',keywords:['中证1000','小盘'] },
+  { key:'sse50',      label:'宽基-上证50',keywords:['上证50','SSE50'] },
+  { key:'sci',        label:'科创主题',  keywords:['科创','科创板','创新','创业板'] },
+  { key:'cycle',      label:'周期/资源', keywords:['周期','资源','有色','钢铁','化工','煤炭','石油'] }
+];
+
+// 对一个产品 / 候选基金做主题识别。返回命中的 theme key 数组（可能为空）。
+function detectTheme(obj){
+  if(!obj) return [];
+  // 三路文本拼接：产品名 + 业绩比较基准 + description
+  const text = [obj.name||'', obj.benchmark||'', obj.description||''].join(' ');
+  if(!text.trim()) return [];
+  const hits = [];
+  INDUSTRY_THEMES.forEach(t=>{
+    if(t.keywords.some(k=>text.indexOf(k)>=0)) hits.push(t.key);
+  });
+  return hits;
+}
+
+// 计算两组主题的重合度：0(无交集)~1(完全相同)
+function themesOverlap(a, b){
+  if(!a || !b || !a.length || !b.length) return 0;
+  const sa = new Set(a), sb = new Set(b);
+  let inter = 0;
+  sa.forEach(k=>{ if(sb.has(k)) inter++; });
+  const uni = new Set([...sa, ...sb]).size;
+  return uni>0 ? inter/uni : 0;
+}
+
+// 预计算所有本品的主题标签，避免每次评分都重扫文本
+PRODUCTS.forEach(p=>{ p._themes = detectTheme(p); });
+
+// ============================================================
 // 主交互逻辑
 // ============================================================
 const STATE = { l1:'ALL', l2:'ALL', l3:'ALL', showAllShares:false, sortKey:'scale', sortAsc:false, selectedCode:null, activeTab:'overview' };
@@ -1923,27 +1978,43 @@ async function findMarketCompetitors(p, n){
   const idx = await loadMarketIndex();
   if(!idx || !idx.length) return [];
   const kw = L1_TO_FUNDTYPE[p.l1] || [];
-  // 优先精确匹配本品 type，匹配不到再用一级关键词
   const myType = p.type || '';
+  const myThemes = p._themes || detectTheme(p);
+  const hasMyTheme = myThemes && myThemes.length > 0;
+
+  // ----- 粗筛：先按 type 精确，再按 L1 关键词扩展 -----
   let pool = idx.filter(f=>!isZhongOuFund(f) && f.type===myType);
-  if(pool.length < 20) {
+  if(pool.length < 40) {
     const extra = idx.filter(f=>!isZhongOuFund(f) && kw.some(k=>(f.type||'').indexOf(k)>=0) && f.type!==myType);
     pool = pool.concat(extra);
   }
-  // 候选池扩大到 30（机构口径希望选大规模主流品，候选少了过滤后没东西可挑）
-  pool = pool.slice().sort(()=>Math.random()-0.5).slice(0, 30);
-  // 拉每个候选的 pingzhongdata，提取近一年收益 + 规模（合并规模） + 净值
+
+  // ----- 主题预筛：若本品有主题，先按"产品名命中相同主题"硬筛一遍 -----
+  // 这里只用产品名识别（外部基金没 benchmark/description）
+  let themedPool = [];
+  if(hasMyTheme){
+    themedPool = pool.filter(f=>{
+      const t = detectTheme({name:f.name});
+      return t.some(k=>myThemes.indexOf(k)>=0);
+    });
+  }
+  // 主题候选 < 8 时，去掉主题约束（避免样本太小拉不到 3 只竞品）
+  const useThemed = themedPool.length >= 8;
+  let candPool = useThemed ? themedPool : pool;
+  // 候选池上限：主题筛过后能保留 24，否则随机 36 进入后续 pingzhongdata 拉取
+  candPool = candPool.slice().sort(()=>Math.random()-0.5).slice(0, useThemed?24:36);
+
+  // ----- 拉 pingzhongdata 富化 y1 / scale / navTrend -----
   const enriched = [];
   const batchSize = 6;
-  for(let i=0;i<pool.length;i+=batchSize){
-    const batch = pool.slice(i, i+batchSize);
+  for(let i=0;i<candPool.length;i+=batchSize){
+    const batch = candPool.slice(i, i+batchSize);
     const arr = await Promise.all(batch.map(async f=>{
       try {
         const data = await loadPingzhong(f.code);
         if(!data) return null;
         const y1 = parseFloat(data.syl_1n);
         const m1 = parseFloat(data.syl_1y);
-        // ★ 修复：pingzhongdata 没有 sScale 字段，规模需从 Data_fluctuationScale.series 末点取
         let cScale = null;
         if(data.Data_fluctuationScale && Array.isArray(data.Data_fluctuationScale.series) && data.Data_fluctuationScale.series.length){
           const last = data.Data_fluctuationScale.series[data.Data_fluctuationScale.series.length-1];
@@ -1955,33 +2026,74 @@ async function findMarketCompetitors(p, n){
           code: f.code, name: f.name, type: f.type,
           y1: isNaN(y1)?null:y1, m1: isNaN(m1)?null:m1,
           scale: cScale,
-          navTrend: trend
+          navTrend: trend,
+          _themes: detectTheme({name:f.name})
         };
       } catch(_) { return null; }
     }));
     arr.forEach(x=>{ if(x) enriched.push(x); });
   }
-  // 评分准备：本品规模/收益
+
+  // ----- 本品口径 -----
   const myPf = DS.perfMap[p.code] || {};
   const myY1 = myPf.y1!=null?myPf.y1:p.annualReturn;
+  const myMDD = myPf.mdd;
   const myScale = (function(){
     const fs = familyScale(p);
     if(fs!=null) return fs;
     return myPf.scale!=null?myPf.scale:p.scale;
   })();
-  // ★ 机构客户口径：剔除规模过小（< max(2亿, 本品规模*15%)）的小基金
-  const minScale = (myScale && myScale>0) ? Math.max(2, myScale*0.15) : 2;
-  let filtered = enriched.filter(c=>c.scale!=null && c.scale>=minScale);
-  if(filtered.length<3) filtered = enriched.filter(c=>c.scale!=null && c.scale>=1);
-  if(filtered.length<3) filtered = enriched.filter(c=>c.scale!=null);
-  if(filtered.length<3) filtered = enriched;
-  // 评分：规模相似度（机构客户最看重）权重 ×2，收益相似度 ×0.5
+
+  // ----- 五级降级策略：主题对齐优先于规模相似（用户核心诉求）-----
+  // 第 1 档：同主题 + 规模 ≥ max(5亿, 本品×20%)
+  // 第 2 档：同主题 + 规模 ≥ max(2亿, 本品×5%)         ← 主题保留，放宽规模
+  // 第 3 档：同主题 + 任何规模 ≥ 1 亿                    ← 主题保留，几乎不限规模
+  // 第 4 档：放弃主题 + 同 L1 + 规模 50%-200%            ← 放弃主题（市场真没同主题基金）
+  // 第 5 档：放弃主题 + 同 L1 + 规模 ≥ 1 亿              ← 兜底
+  // useThemed 决定 enriched 是否已限定在同主题候选池
+  let matchTier;
+  let filtered;
+  if(useThemed){
+    const minScale1 = (myScale && myScale>0) ? Math.max(5, myScale*0.20) : 5;
+    filtered = enriched.filter(c=>c.scale!=null && c.scale>=minScale1);
+    matchTier = 'theme_scale';
+    if(filtered.length < (n||3)){
+      const minScale2 = (myScale && myScale>0) ? Math.max(2, myScale*0.05) : 2;
+      filtered = enriched.filter(c=>c.scale!=null && c.scale>=minScale2);
+      matchTier = 'theme_loose';
+    }
+    if(filtered.length < (n||3)){
+      filtered = enriched.filter(c=>c.scale!=null && c.scale>=1);
+      matchTier = 'theme_any';
+    }
+  } else {
+    matchTier = 'l1_scale_range';
+    const lo = myScale ? myScale*0.5 : 5;
+    const hi = myScale ? myScale*2.0 : 1e6;
+    filtered = enriched.filter(c=>c.scale!=null && c.scale>=lo && c.scale<=hi);
+    if(filtered.length < (n||3)){
+      matchTier = 'l1_only';
+      filtered = enriched.filter(c=>c.scale!=null && c.scale>=1);
+    }
+  }
+  if(filtered.length < (n||3)){
+    matchTier = 'fallback';
+    filtered = enriched.filter(c=>c.scale!=null);
+  }
+  if(filtered.length < (n||3)) filtered = enriched;
+
+  // ----- 打分公式 -----
+  // scale 权重 ×5（机构销售最重视），y1 权重 ×1.5，mdd ×1.0；主题重合度作为负向调整 -3
   filtered.forEach(c=>{
-    const y1d = (myY1!=null && c.y1!=null) ? Math.abs(myY1 - c.y1) : 50;
-    const scd = (myScale!=null && c.scale!=null) ? Math.abs(Math.log((myScale+1)/(c.scale+1))) : 5;
-    c._score = scd*2 + y1d*0.5;
+    const scd  = (myScale!=null && c.scale!=null) ? Math.abs(Math.log((myScale+1)/(c.scale+1))) : 5;
+    const y1d  = (myY1!=null && c.y1!=null) ? Math.abs(myY1 - c.y1)/100 : 0.5;
+    const mddd = 0.3; // mdd 在 enriched 阶段没拉，留中性权重位
+    const themeBoost = themesOverlap(myThemes, c._themes||[]);
+    c._score = scd*5 + y1d*1.5 + mddd*1.0 - themeBoost*3;
   });
   const winners = filtered.sort((a,b)=>a._score-b._score).slice(0, n||3);
+  winners._matchTier = matchTier;
+  winners._myThemes = myThemes;
 
   // ★ 关键修正：把入选竞品也按"基金家族"合并规模（A+C+E... 合算）
   // 在市场索引里按剥掉份额后缀的基础名匹配同家族产品，拉它们的 pingzhongdata 求和
@@ -2032,8 +2144,8 @@ function tabCompetitorHtml(p){
   return '<div class="dr-section">'+
     '<div class="dr-section-title">市场同类对比 <span class="src-badge live" style="background:rgba(76,205,196,0.15);color:var(--teal)">天天基金 · 家族合并口径</span></div>'+
     '<div style="font-size:11px;color:var(--text-3);margin-bottom:10px;line-height:1.55">'+
-    '从全市场同类基金中按 *投资类型 + 近一年收益 + 规模* 三维相似度自动匹配 3 只主流竞品。'+
-    '<br>⚠ 风格判断请人工二次确认。</div>'+
+    '机构销售口径：<b style="color:var(--text-2)">行业主题</b> 严格对齐 → <b style="color:var(--text-2)">投资类型</b> 一致 → <b style="color:var(--text-2)">规模</b> 量级相近，匹配 3 只主流竞品。'+
+    '<br>⚠ 风格判断仍请人工二次确认；同主题不足 3 只时自动降级，UI 会提示。</div>'+
     '<div id="rivalArea" data-code="'+p.code+'"><div style="color:var(--text-3);font-size:12px;padding:20px 0">加载中…（首次需联网拉取市场基金索引，约 3 秒）</div></div>'+
     '<div id="rivalCompareChart" style="width:100%;height:280px;margin-top:14px;display:none"></div>'+
     '<div id="rivalRadarChart" style="width:100%;height:260px;margin-top:14px;display:none"></div>'+
@@ -2074,7 +2186,29 @@ function drawRivalCompare(p, rivals){
       others.map(v=>'<td style="color:var(--text-2);padding:5px 8px">'+v+'</td>').join('')+'</tr>';
   };
 
-  let html = '<table class="rival-table" style="width:100%;border-collapse:collapse;font-size:12px;margin-top:8px">';
+  // 匹配规则的透明化说明（用户可一眼看到选品依据）
+  const tier = rivals._matchTier || 'theme_scale';
+  const themeLabels = (rivals._myThemes||[]).map(k=>{ const t = INDUSTRY_THEMES.find(x=>x.key===k); return t?t.label:k; });
+  const tierMsg = (function(){
+    if(tier==='theme_scale' && themeLabels.length){
+      return '<span style="color:var(--green)">●</span> 已严格按 <b>'+themeLabels.join(' / ')+'</b> 主题 + <b>'+p.l2+'</b> + 规模相近匹配';
+    }
+    if(tier==='theme_loose' && themeLabels.length){
+      return '<span style="color:var(--green)">●</span> 已保留 <b>'+themeLabels.join(' / ')+'</b> 主题约束，规模门槛放宽至本品 5%';
+    }
+    if(tier==='theme_any' && themeLabels.length){
+      return '<span style="color:#FFB800">●</span> 已保留 <b>'+themeLabels.join(' / ')+'</b> 主题对齐，市场上同主题规模相近基金不足，规模差异请人工注意';
+    }
+    if(tier==='l1_scale_range'){
+      return '<span style="color:#FFB800">●</span> 本品无明显主题，降级到 <b>'+p.l2+'</b> + 规模 50%-200% 区间匹配';
+    }
+    if(tier==='l1_only'){
+      return '<span style="color:#FFB800">●</span> 同规模候选不足，已降级到 <b>'+p.l1+'</b> + 规模 ≥ 1 亿';
+    }
+    return '<span style="color:#FF5C5C">●</span> 候选数据稀疏，已放宽全部约束';
+  })();
+  let html = '<div style="font-size:11px;color:var(--text-3);margin-bottom:8px;line-height:1.6">'+tierMsg+'</div>';
+  html += '<table class="rival-table" style="width:100%;border-collapse:collapse;font-size:12px;margin-top:8px">';
   html += '<thead><tr style="border-bottom:1px solid var(--border)"><th style="text-align:left;padding:6px 8px;color:var(--text-3);font-weight:500;font-size:11px">指标</th>';
   html += '<th style="text-align:left;padding:6px 8px;color:var(--green);font-weight:600">'+p.name+' <span style="color:var(--text-3);font-size:10px;font-weight:400">(本品)</span></th>';
   rivals.forEach(r=>{
