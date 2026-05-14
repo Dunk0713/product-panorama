@@ -21,7 +21,7 @@ html,body{margin:0;padding:0;background:var(--bg-0);color:var(--text-1);
 body{background-image:radial-gradient(1200px 600px at 12% -10%,rgba(0,200,83,0.06),transparent 60%),radial-gradient(1000px 500px at 88% 110%,rgba(76,205,196,0.05),transparent 60%);min-height:100vh;padding-bottom:60px}
 
 /* Header */
-.topbar{display:flex;align-items:center;justify-content:space-between;padding:18px 28px;border-bottom:1px solid var(--border);background:rgba(15,20,34,0.65);backdrop-filter:blur(8px);position:sticky;top:0;z-index:50}
+.topbar{display:flex;align-items:center;justify-content:space-between;padding:18px 28px;border-bottom:1px solid var(--border);background:rgba(15,20,34,0.85);backdrop-filter:blur(8px);position:sticky;top:0;z-index:50;box-shadow:0 2px 8px rgba(0,0,0,0.25)}
 .brand{display:flex;align-items:center;gap:14px}
 .brand-mark{width:38px;height:38px;background:linear-gradient(135deg,var(--green) 0%,#00875A 100%);border-radius:8px;position:relative;box-shadow:0 4px 16px rgba(0,200,83,0.35)}
 .brand-mark::after{content:'CE';position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-weight:800;color:#fff;font-size:14px;letter-spacing:.5px}
@@ -64,10 +64,10 @@ body{background-image:radial-gradient(1200px 600px at 12% -10%,rgba(0,200,83,0.0
 /* Main grid */
 .main-grid{display:grid;grid-template-columns:3fr 2fr;gap:14px;padding:14px 28px 0}
 .panel{background:var(--bg-1);border:1px solid var(--border);border-radius:12px;overflow:hidden}
-.panel-header{display:flex;align-items:center;justify-content:space-between;padding:14px 18px 6px}
-.panel-title{font-size:14px;font-weight:600;color:var(--text-1);letter-spacing:.3px}
+.panel-header{display:flex;align-items:center;justify-content:space-between;padding:14px 18px 6px;flex-wrap:wrap;gap:6px}
+.panel-title{font-size:14px;font-weight:600;color:var(--text-1);letter-spacing:.3px;flex-shrink:0}
 .panel-title::before{content:'';display:inline-block;width:3px;height:13px;background:var(--green);border-radius:2px;vertical-align:-1px;margin-right:8px}
-.panel-hint{font-size:11px;color:var(--text-3)}
+.panel-hint{font-size:11px;color:var(--text-3);line-height:1.5;text-align:right;max-width:70%}
 .chart-box{width:100%;height:520px}
 
 /* Table */
@@ -258,7 +258,7 @@ body{background-image:radial-gradient(1200px 600px at 12% -10%,rgba(0,200,83,0.0
 .ds-time{color:var(--text-1);font-weight:500}
 
 /* === 新增：市场脉搏 ticker === */
-.ticker-bar{display:flex;align-items:center;gap:14px;padding:8px 28px;border-bottom:1px solid var(--border-soft);background:rgba(15,20,34,0.55);overflow-x:auto;white-space:nowrap;scrollbar-width:none}
+.ticker-bar{display:flex;align-items:center;gap:14px;padding:10px 28px;margin-top:4px;border-top:1px solid var(--border-soft);border-bottom:1px solid var(--border-soft);background:rgba(15,20,34,0.65);overflow-x:auto;white-space:nowrap;scrollbar-width:none;position:relative;z-index:40}
 .ticker-bar::-webkit-scrollbar{display:none}
 .ticker-label{font-size:10px;color:var(--text-4);font-weight:600;letter-spacing:1.5px;text-transform:uppercase;flex-shrink:0;min-width:64px}
 .ticker-items{display:flex;gap:18px;flex-wrap:nowrap;flex:1}
@@ -1509,7 +1509,8 @@ function renderBubble(){
 
   bubbleChart.setOption({
     backgroundColor:'transparent',
-    grid:{ left:56, right:30, top:36, bottom:64, containLabel:true },
+    // top 加大到 48：给 graphic"★右上方..."腾出垂直空间，避免与 .panel-hint 文字重叠
+    grid:{ left:56, right:30, top:48, bottom:64, containLabel:true },
     legend:{ bottom:4, left:'center', itemWidth:10, itemHeight:10, textStyle:{color:'#B4BAC8',fontSize:12}, icon:'circle' },
     // X 轴：最大回撤（负值），数值由左到右递增（更接近 0 = 回撤更浅 = 更好）
     xAxis:{ type:'value', name:'最大回撤(%)  回撤越浅 →', nameLocation:'middle', nameGap:38,
@@ -1521,11 +1522,12 @@ function renderBubble(){
     yAxis:{ type:'value', name:'↑ 近一年收益(%)', nameTextStyle:{color:'#7A8294',fontSize:11,padding:[0,0,0,-30]},
       axisLine:{lineStyle:{color:'#232B3F'}}, axisLabel:{color:'#7A8294',formatter:v=>v+'%'},
       splitLine:{lineStyle:{color:'#1A2032',type:'dashed'}}, min:yMin, max:yMax },
-    // 四象限提示：右上 = 收益高且回撤浅 = 最优
+    // 四象限提示：right:30 top:20 —— 落在 grid 上方留白带（top:48）内，不再侵入图表区
     graphic: [
-      { type:'text', right:30, top:8, style:{ text:'★ 右上方 = 高收益 + 低回撤 = 最优', fill:'#FFB800', fontSize:11, fontWeight:600 } }
+      { type:'text', right:30, top:20, style:{ text:'★ 右上方 = 高收益 + 低回撤 = 最优', fill:'#FFB800', fontSize:10, fontWeight:600 } }
     ],
     tooltip:{ backgroundColor:'rgba(15,20,34,0.96)', borderColor:'#232B3F', borderWidth:1,
+      confine:true,  // 防止 tooltip 越出图表容器边界
       textStyle:{color:'#E5E7EB',fontSize:12}, padding:12,
       formatter: pt=>{
         const [mdd,y1,sc,code,mgr,statusCode,l1,l2,l3]=pt.value;
