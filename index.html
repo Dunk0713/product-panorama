@@ -796,7 +796,20 @@ async function loadPingzhong(code){
 // ② 近期业绩加载器（从 pingzhongdata 提取 昨日 / 近1周 / 近1月 / 近3月 / 近6月 / 近1年 + 规模 + 经理）
 async function loadPerformance(code){
   if(DS.perfMap[code]) return DS.perfMap[code];
-  const raw = await loadPingzhong(code);
+  // localStorage 缓存：24h 内直接命中，大幅减少 pingzhongdata 请求
+  try{
+    const cached = localStorage.getItem('zo_perf_v2:'+code);
+    if(cached){
+      const obj = JSON.parse(cached);
+      if(obj && obj.t && (Date.now()-obj.t) < 24*3600*1000 && obj.d){
+        DS.perfMap[code] = obj.d;
+        return obj.d;
+      }
+    }
+  }catch(_){}
+  let raw = await loadPingzhong(code);
+  // 一次失败后重试 1 次（pingzhongdata 偶发限流，单次重试可显著提高完整率）
+  if(!raw){ await new Promise(r=>setTimeout(r, 300)); raw = await loadPingzhong(code); }
   if(!raw) return null;
   const trend = (raw.Data_netWorthTrend||[]).map(x=>x.y);
   // 昨日收益率：trend 末两点之差（pingzhongdata 末点 = 最新交易日单位净值）
@@ -831,12 +844,14 @@ async function loadPerformance(code){
     dwjz: lastNav && lastNav.y ? +lastNav.y : null,
     jzrq: jzrqStr
   };
+  // 写入 localStorage（容量超出时静默失败）
+  try{ localStorage.setItem('zo_perf_v2:'+code, JSON.stringify({t:Date.now(), d:DS.perfMap[code]})); }catch(_){}
   return DS.perfMap[code];
 }
 
 // ③ 批量加载所有主份额业绩（滑动窗口，20 并发，每完成 8 只刷新一次 UI）
 async function loadAllPerformance(codes){
-  const concurrency = 20;
+  const concurrency = 32;
   let ok = 0, fail = 0;
   let cursor = 0;
   let sinceLastRefresh = 0;
@@ -1046,6 +1061,43 @@ const fmt = {
 function l1Color(l1){ const x = L1_BY_KEY[l1]; return x?x.color:'#888'; }
 function statusInfo(p){ return STATUS_META[p.status.code]; }
 function sharePasses(p){ if(STATE.showAllShares) return true; return p.isPrimary !== false; }
+
+// ============================================================
+// 基金"家族"分组 —— 同一只基金的 A/C/E/H... 不同份额聚合为一只
+// 用于：①规模合并显示  ②"显示份额变体"切换的 chip 计数
+// ============================================================
+const FAMILY_BY_CODE = new Map();
+const FAMILY_MEMBERS = new Map();
+function familyKey(p){
+  const sc = (p.shareClass||'').trim();
+  // shareClass 单字母（A/B/C/D/E/H/I/R/Q/Y...）且 name 以该字母结尾 → 剥掉
+  if(sc && sc.length===1 && /^[A-Z]$/.test(sc) && p.name && p.name.endsWith(sc)){
+    return p.name.slice(0,-1);
+  }
+  // 兜底：若 shareClass 是 "_" 或缺失，用原 name；若 shareClass 是多字母（如 "QDII"），也用原 name
+  return p.name || p.code;
+}
+function buildFamilies(){
+  FAMILY_BY_CODE.clear(); FAMILY_MEMBERS.clear();
+  PRODUCTS.forEach(p=>{
+    const k = familyKey(p);
+    FAMILY_BY_CODE.set(p.code, k);
+    if(!FAMILY_MEMBERS.has(k)) FAMILY_MEMBERS.set(k, []);
+    FAMILY_MEMBERS.get(k).push(p);
+  });
+}
+// 合并规模：把同家族（A+C+E...）的实盘规模相加
+function familyScale(p){
+  const k = FAMILY_BY_CODE.get(p.code); if(!k) return null;
+  const members = FAMILY_MEMBERS.get(k) || [p];
+  let sum = 0, has = false;
+  members.forEach(m=>{
+    const pf = DS.perfMap[m.code];
+    const v = (pf && pf.scale!=null) ? pf.scale : (m.scale||null);
+    if(v!=null && !isNaN(v)){ sum += v; has = true; }
+  });
+  return has ? sum : null;
+}
 function filteredProducts(){
   return PRODUCTS.filter(p =>
     (STATE.l1==='ALL' || p.l1===STATE.l1) &&
@@ -1056,14 +1108,18 @@ function filteredProducts(){
 // 业绩字段统一从 perfMap 读取（兜底 PRODUCTS 自带的 annualReturn / scale）
 function getPerf(p){
   const pf = DS.perfMap[p.code] || {};
+  // 规模：未展开份额变体时显示家族合并规模（A+C+E...），否则显示自身
+  let scale;
+  if(STATE.showAllShares){
+    scale = pf.scale!=null ? pf.scale : (p.scale||null);
+  } else {
+    const fs = familyScale(p);
+    scale = fs!=null ? fs : (pf.scale!=null ? pf.scale : (p.scale||null));
+  }
   return {
-    d1: pf.d1,
-    w1: pf.w1,
-    m1: pf.m1,
-    m3: pf.m3,
-    m6: pf.m6,
+    d1: pf.d1, w1: pf.w1, m1: pf.m1, m3: pf.m3, m6: pf.m6,
     y1: pf.y1!=null ? pf.y1 : (p.annualReturn||null),
-    scale: pf.scale!=null ? pf.scale : (p.scale||null)
+    scale
   };
 }
 function sortedProducts(list){
@@ -1089,9 +1145,11 @@ function renderTopbarDate(){
 // 一级（投资大类）
 function renderChips(){
   const bar = document.getElementById('chipBar');
-  document.getElementById('chipCountALL').textContent = PRODUCTS.length;
+  const passList = PRODUCTS.filter(sharePasses);
+  document.getElementById('chipCountALL').textContent = passList.length;
   INVEST_HIERARCHY.forEach(h=>{
-    const cnt = PRODUCTS.filter(p=>p.l1===h.l1).length;
+    // 一级 chip 显示"当前份额视图下"的命中数，避免"货币型 13 / 实际 3"这种联动 bug
+    const cnt = passList.filter(p=>p.l1===h.l1).length;
     if(cnt===0) return;
     const btn = document.createElement('button');
     btn.className='chip'; btn.dataset.l1=h.l1;
@@ -1123,7 +1181,7 @@ function renderSubChips(){
   bar.style.display='';
   const h = L1_BY_KEY[STATE.l1];
   if(!h) return;
-  const baseList = PRODUCTS.filter(p=>p.l1===STATE.l1);
+  const baseList = PRODUCTS.filter(p=>p.l1===STATE.l1 && sharePasses(p));
   h.l2.forEach(l2=>{
     const cnt = baseList.filter(p=>p.l2===l2.key).length;
     if(cnt===0) return;
@@ -1151,7 +1209,7 @@ function renderSubChips3(){
   if(!h) return;
   const l2def = h.l2.find(x=>x.key===STATE.l2);
   if(!l2def) return;
-  const baseList = PRODUCTS.filter(p=>p.l1===STATE.l1 && p.l2===STATE.l2);
+  const baseList = PRODUCTS.filter(p=>p.l1===STATE.l1 && p.l2===STATE.l2 && sharePasses(p));
   l2def.l3.forEach(l3key=>{
     const cnt = baseList.filter(p=>p.l3===l3key).length;
     if(cnt===0) return;
@@ -1186,7 +1244,7 @@ function bindSubChipsEvents(){
 }
 function renderKpi(){
   const list = filteredProducts();
-  // 每只产品的有效规模：优先 perfMap.scale，兜底 p.scale
+  // 每只产品的有效规模：用自身实盘规模（不走家族合并），避免聚合时重复加同家族其他份额
   const scales = list.map(p=>{
     const v = (DS.perfMap[p.code] && DS.perfMap[p.code].scale) || p.scale || 0;
     return { code:p.code, v };
@@ -1238,7 +1296,7 @@ function renderBubble(){
   // X = 近一月、Y = 近一年（均来自 pingzhongdata 公开数据），气泡大小 = 规模（缺规模给固定小气泡）
   const data = filteredProducts().map(p=>{
     const pf = DS.perfMap[p.code]||{};
-    const scale = pf.scale!=null?pf.scale:(p.scale||0);
+    const scale = getPerf(p).scale || 0;
     const y1 = pf.y1!=null?pf.y1:null;
     const m1 = pf.m1!=null?pf.m1:null;
     return { p, scale: scale||0, y1, m1, mgr: pf.manager||p.manager };
@@ -1306,8 +1364,7 @@ function renderTree(){
   // 三层 treemap：L1 → L2 → L3（按规模聚合，无规模产品按数量按 1 兜底）
   // 规模数据从 perfMap.scale 取，兜底 p.scale；都没有则按数量 1 计入便于显示
   const data = filteredProducts().map(p=>{
-    const pf = DS.perfMap[p.code]||{};
-    const scale = (pf.scale!=null?pf.scale:p.scale) || 0;
+    const scale = getPerf(p).scale || 0;
     return { p, scale };
   });
 
@@ -1414,7 +1471,7 @@ function renderTable(){
   tbody.innerHTML = list.map(p=>{
     const sm = statusInfo(p);
     const pf = DS.perfMap[p.code] || {};
-    const effScale = pf.scale!=null?pf.scale:p.scale;
+    const effScale = getPerf(p).scale;
     const effMgr = pf.manager || p.manager;
     // sanity flag
     const sanityFlag = (p._sanityIssues && p._sanityIssues.length)
@@ -1616,12 +1673,18 @@ async function findMarketCompetitors(p, n){
   const idx = await loadMarketIndex();
   if(!idx || !idx.length) return [];
   const kw = L1_TO_FUNDTYPE[p.l1] || [];
-  let pool = idx.filter(f=>!isZhongOuFund(f) && kw.some(k=>(f.type||'').indexOf(k)>=0));
-  // 随机抽 12 个候选（控制 pingzhongdata 拉取量）
-  pool = pool.slice().sort(()=>Math.random()-0.5).slice(0, 12);
-  // 拉每个候选的 pingzhongdata，提取近一年收益 + 规模 + 净值
+  // 优先精确匹配本品 type，匹配不到再用一级关键词
+  const myType = p.type || '';
+  let pool = idx.filter(f=>!isZhongOuFund(f) && f.type===myType);
+  if(pool.length < 20) {
+    const extra = idx.filter(f=>!isZhongOuFund(f) && kw.some(k=>(f.type||'').indexOf(k)>=0) && f.type!==myType);
+    pool = pool.concat(extra);
+  }
+  // 候选池扩大到 30（机构口径希望选大规模主流品，候选少了过滤后没东西可挑）
+  pool = pool.slice().sort(()=>Math.random()-0.5).slice(0, 30);
+  // 拉每个候选的 pingzhongdata，提取近一年收益 + 规模（合并规模） + 净值
   const enriched = [];
-  const batchSize = 4;
+  const batchSize = 6;
   for(let i=0;i<pool.length;i+=batchSize){
     const batch = pool.slice(i, i+batchSize);
     const arr = await Promise.all(batch.map(async f=>{
@@ -1630,28 +1693,45 @@ async function findMarketCompetitors(p, n){
         if(!data) return null;
         const y1 = parseFloat(data.syl_1n);
         const m1 = parseFloat(data.syl_1y);
-        const sScale = parseFloat(data.sScale);
+        // ★ 修复：pingzhongdata 没有 sScale 字段，规模需从 Data_fluctuationScale.series 末点取
+        let cScale = null;
+        if(data.Data_fluctuationScale && Array.isArray(data.Data_fluctuationScale.series) && data.Data_fluctuationScale.series.length){
+          const last = data.Data_fluctuationScale.series[data.Data_fluctuationScale.series.length-1];
+          if(last && typeof last.y === 'number') cScale = last.y;
+        }
+        if(cScale==null){ const fb = parseFloat(data.sScale); if(!isNaN(fb)) cScale = fb; }
         const trend = (data.Data_netWorthTrend||[]).slice(-250).map(t=>({x:t.x,y:t.y}));
         return {
           code: f.code, name: f.name, type: f.type,
           y1: isNaN(y1)?null:y1, m1: isNaN(m1)?null:m1,
-          scale: isNaN(sScale)?null:sScale,
+          scale: cScale,
           navTrend: trend
         };
       } catch(_) { return null; }
     }));
     arr.forEach(x=>{ if(x) enriched.push(x); });
   }
-  // 评分：本品 y1 已知 → 取近一年收益最接近的；未知则取规模接近的；都没就按命名相似度
+  // 评分准备：本品规模/收益
   const myPf = DS.perfMap[p.code] || {};
   const myY1 = myPf.y1!=null?myPf.y1:p.annualReturn;
-  const myScale = myPf.scale!=null?myPf.scale:p.scale;
-  enriched.forEach(c=>{
-    const y1d = (myY1!=null && c.y1!=null) ? Math.abs(myY1 - c.y1) : 99;
-    const scd = (myScale!=null && c.scale!=null) ? Math.abs(Math.log((myScale+1)/(c.scale+1))) : 99;
-    c._score = y1d + scd*0.5;
+  const myScale = (function(){
+    const fs = familyScale(p);
+    if(fs!=null) return fs;
+    return myPf.scale!=null?myPf.scale:p.scale;
+  })();
+  // ★ 机构客户口径：剔除规模过小（< max(2亿, 本品规模*15%)）的小基金
+  const minScale = (myScale && myScale>0) ? Math.max(2, myScale*0.15) : 2;
+  let filtered = enriched.filter(c=>c.scale!=null && c.scale>=minScale);
+  if(filtered.length<3) filtered = enriched.filter(c=>c.scale!=null && c.scale>=1);
+  if(filtered.length<3) filtered = enriched.filter(c=>c.scale!=null);
+  if(filtered.length<3) filtered = enriched;
+  // 评分：规模相似度（机构客户最看重）权重 ×2，收益相似度 ×0.5
+  filtered.forEach(c=>{
+    const y1d = (myY1!=null && c.y1!=null) ? Math.abs(myY1 - c.y1) : 50;
+    const scd = (myScale!=null && c.scale!=null) ? Math.abs(Math.log((myScale+1)/(c.scale+1))) : 5;
+    c._score = scd*2 + y1d*0.5;
   });
-  return enriched.sort((a,b)=>a._score-b._score).slice(0, n||3);
+  return filtered.sort((a,b)=>a._score-b._score).slice(0, n||3);
 }
 
 function tabCompetitorHtml(p){
@@ -1707,7 +1787,8 @@ function drawRivalCompare(p, rivals){
   const pf = DS.perfMap[p.code] || {};
   const myY1 = pf.y1!=null?pf.y1:p.annualReturn;
   const myM1 = pf.m1;
-  const myScale = pf.scale!=null?pf.scale:p.scale;
+  // 与表格/卡片一致：用合并后的家族规模
+  const myScale = (function(){ const fs = familyScale(p); return fs!=null?fs:(pf.scale!=null?pf.scale:p.scale); })();
 
   const fmtPct = v => (v==null||isNaN(v)) ? '<span style="color:var(--text-4)">--</span>' : ((v>=0?'+':'')+(+v).toFixed(2)+'%');
   const fmtSc  = v => (v==null||isNaN(v)||v===0) ? '<span style="color:var(--text-4)">--</span>' : fmt.scale(v);
@@ -1805,7 +1886,7 @@ function openDrawer(code){
   const sm = STATUS_META[p.status.code];
   const subDisplay = (p.l3 || p.l2 || '') + (p.inception && p.inception!=='-' ? (' · 成立于 '+p.inception) : '');
   const pf = DS.perfMap[p.code] || {};
-  const effScale = pf.scale!=null?pf.scale:p.scale;
+  const effScale = getPerf(p).scale;
   const scaleDisplay = (effScale||0)>0 ? (fmt.scale(effScale)+' 亿') : '<span style="color:var(--text-4)">业绩加载中…</span>';
   const html = '<div class="dr-head">'+
     '<div class="dr-name">'+p.name+'</div>'+
@@ -1910,7 +1991,18 @@ function closeDrawer(){
   STATE.selectedCode = null;
   if (miniChart) { miniChart.dispose(); miniChart=null; }
 }
-function renderAll(){ renderKpi(); renderBubble(); renderTree(); renderTable(); updatePoolStat(); updateHealthBadge(); }
+function refreshChipCounts(){
+  // 业绩/份额视图变化后只刷计数，不重建 DOM
+  const passList = PRODUCTS.filter(sharePasses);
+  const all = document.getElementById('chipCountALL');
+  if(all) all.textContent = passList.length;
+  document.querySelectorAll('#chipBar .chip[data-l1]').forEach(btn=>{
+    const l1 = btn.dataset.l1; if(l1==='ALL') return;
+    const span = btn.querySelector('.chip-count');
+    if(span) span.textContent = passList.filter(p=>p.l1===l1).length;
+  });
+}
+function renderAll(){ refreshChipCounts(); renderKpi(); renderBubble(); renderTree(); renderTable(); updatePoolStat(); updateHealthBadge(); }
 
 // ---------- 数据健康面板 ----------
 function updateHealthBadge(){
@@ -1951,6 +2043,7 @@ function closeHealthPanel(){
 window.__startApp = function(){
   document.getElementById('loadingOverlay').classList.add('hidden');
   renderTopbarDate();
+  buildFamilies();
   renderChips();
   renderSubChips();
   bindSubChipsEvents();
@@ -1984,7 +2077,7 @@ window.__startApp = function(){
 
   // === 开关 ===
   const tShr = document.getElementById('toggleShares');
-  if(tShr){ tShr.checked = STATE.showAllShares; tShr.addEventListener('change', ()=>{ STATE.showAllShares = tShr.checked; renderAll(); updatePoolStat(); kickoffFullPerf(); }); }
+  if(tShr){ tShr.checked = STATE.showAllShares; tShr.addEventListener('change', ()=>{ STATE.showAllShares = tShr.checked; refreshChipCounts(); renderSubChips(); renderAll(); updatePoolStat(); kickoffFullPerf(); }); }
   updatePoolStat();
 
   // === 异步拉公开数据（不阻塞首屏）===
