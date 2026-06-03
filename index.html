@@ -1068,7 +1068,7 @@ function mgrDetailHtml(p){
   let html = '<div class="dr-mgr-tenure">投资风格：'+(p.style||'--')+(pf.mgrWorkTime?(' · 任职 '+escapeHtml(pf.mgrWorkTime)):'')+'</div>';
   const line2 = [];
   if(pf.mgrFundSize) line2.push('在管 '+escapeHtml(pf.mgrFundSize));
-  if(pf.mgrStar!=null) line2.push('天天基金评级 '+'★'.repeat(pf.mgrStar)+'☆'.repeat(Math.max(0,5-pf.mgrStar)));
+  if(pf.mgrStar>0) line2.push('天天基金评级 '+'★'.repeat(pf.mgrStar)+'☆'.repeat(Math.max(0,5-pf.mgrStar))); // star=0 视为未评级（货币基金等），隐藏不显示空星
   if(line2.length) html += '<div class="dr-mgr-mw">'+line2.join(' · ')+'</div>';
   return html;
 }
