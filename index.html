@@ -446,6 +446,7 @@ body{background-image:var(--page-grad);min-height:100vh;padding-bottom:60px;tran
     <input id="searchBox" type="search" placeholder="搜索 名称 / 代码 / 经理" autocomplete="off"
       style="background:var(--glass-bg);border:1px solid var(--glass-border);color:var(--text-1);font-size:12px;padding:6px 12px;border-radius:999px;width:190px;outline:none;font-family:inherit;backdrop-filter:blur(var(--blur))">
     <button id="favToggle" class="chip" style="padding:6px 12px;font-size:12px" title="只看自选产品">☆ 自选</button>
+    <button id="instToggle" class="chip" style="padding:6px 12px;font-size:12px" title="只看机构盘（机构持有比例 ≥ 50%，按最新披露）">🏛 机构盘</button>
     <button id="clearFilters" class="chip" style="padding:6px 12px;font-size:12px;display:none" title="清除全部筛选与搜索">✕ 清除筛选</button>
     <label style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text-3);cursor:pointer;user-select:none">
       <input type="checkbox" id="toggleShares" style="accent-color:var(--teal);cursor:pointer">
@@ -529,6 +530,7 @@ body{background-image:var(--page-grad);min-height:100vh;padding-bottom:60px;tran
           <th data-sort="y1" class="num" title="近一年收益率（pingzhongdata · syl_1n）">近一年(%)</th>
           <th data-sort="ytd" class="num" title="今年以来收益率（YTD，自当年首个交易日起算 / rankhandler 今年来）">今年以来(%)</th>
           <th data-sort="ytdMdd" class="num" title="今年以来最大回撤（YTD，仅当年净值区间内滚动峰值计算；货币基金不适用）">今年最大回撤(%)</th>
+          <th data-sort="instHold" class="num" title="机构持有比例（来自天天基金「持有人结构」，半/年报披露；占比越高越偏机构定制 / 委外属性。未披露显示 --）">机构持仓(%)</th>
           <th data-sort="l3">三级细分</th>
         </tr>
       </thead>
@@ -856,7 +858,7 @@ PRODUCTS.forEach(p=>{ p._themes = detectTheme(p); });
 // ============================================================
 // 主交互逻辑
 // ============================================================
-const STATE = { l1:'ALL', l2:'ALL', l3:'ALL', showAllShares:false, sortKey:'scale', sortAsc:false, selectedCode:null, activeTab:'overview', search:'', favOnly:false };
+const STATE = { l1:'ALL', l2:'ALL', l3:'ALL', showAllShares:false, sortKey:'scale', sortAsc:false, selectedCode:null, activeTab:'overview', search:'', favOnly:false, instOnly:false };
 // 自选清单（localStorage 持久化，跨会话保留销售自己常用的产品）
 const FAVS = (function(){ try{ return new Set(JSON.parse(localStorage.getItem('zo_favs')||'[]')); }catch(_){ return new Set(); } })();
 function isFav(code){ return FAVS.has(code); }
@@ -1011,6 +1013,18 @@ function fmtInstHold(ratio, date){
   const ds = date ? ('<span style="font-size:10px;color:var(--text-4);font-weight:400;margin-left:4px">截至'+date+'</span>') : '';
   return '<span style="color:'+col+'">'+(+ratio).toFixed(2)+'%</span>'+
          '<span style="font-size:10px;color:'+col+';font-weight:500;margin-left:5px;padding:1px 5px;border:1px solid '+col+'55;border-radius:3px">'+tag+'</span>'+ds;
+}
+// 表格专用紧凑版：数值 + 分级配色（标签放 title，避免列过宽）；与 fmtInstHold 同口径
+// 机构盘（≥50%）青色加粗一眼可辨，散户灰色弱化
+function instHoldCellCompact(pf){
+  const r = pf && pf.instHold;
+  if(r==null||isNaN(r)) return '<span style="color:var(--text-4)">--</span>';
+  let col, tag;
+  if(r>=80){ col='#4CCDC4'; tag='机构主导'; }
+  else if(r>=50){ col='#4CCDC4'; tag='机构为主'; }
+  else if(r>=20){ col='#E5E7EB'; tag='机构散户均衡'; }
+  else { col='#7A8294'; tag='散户为主'; }
+  return '<span style="color:'+col+';font-weight:'+(r>=50?'600':'400')+'" title="'+tag+(pf.instHoldDate?' · 截至'+pf.instHoldDate:'')+'">'+r.toFixed(1)+'%</span>';
 }
 
 // ② 近期业绩加载器（从 pingzhongdata 提取 昨日 / 近1周 / 近1月 / 近3月 / 近6月 / 近1年 + 规模 + 经理）
@@ -1542,6 +1556,7 @@ function filteredProducts(){
          (STATE.l3==='ALL' || p.l3===STATE.l3) &&
          sharePasses(p))) return false;
     if(STATE.favOnly && !FAVS.has(p.code)) return false;
+    if(STATE.instOnly){ const ih=(DS.perfMap[p.code]||{}).instHold; if(!(ih!=null && ih>=50)) return false; }
     if(q){
       const mgr = (DS.perfMap[p.code] && DS.perfMap[p.code].manager) || p.manager || '';
       const hay = (p.name+' '+p.code+' '+mgr).toLowerCase();
@@ -1583,6 +1598,7 @@ function sortedProducts(list){
   const getVal = p => {
     if(perfKeys.includes(k)){ const v = getPerf(p)[k]; return (v==null||isNaN(v))?-Infinity:v; }
     if(k==='scale'){ const v = getPerf(p).scale; return (v==null||isNaN(v))?-Infinity:v; }
+    if(k==='instHold'){ const v = (DS.perfMap[p.code]||{}).instHold; return (v==null||isNaN(v))?-Infinity:v; }
     return p[k];
   };
   return [...list].sort((a,b)=>{
@@ -2027,7 +2043,7 @@ function renderTable(){
     return '<span style="color:#FF5C5C;font-weight:500">'+v.toFixed(2)+'</span>';
   };
   if(!list.length){
-    tbody.innerHTML = '<tr><td colspan="11" style="text-align:center;padding:44px 12px;color:var(--text-3)">未找到符合条件的产品 — 可调整筛选或点击「✕ 清除筛选」</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="12" style="text-align:center;padding:44px 12px;color:var(--text-3)">未找到符合条件的产品 — 可调整筛选或点击「✕ 清除筛选」</td></tr>';
     document.querySelectorAll('#ptable thead th').forEach(th=>{ const a=th.querySelector('.sort-arrow'); if(a) a.remove(); });
     updateTableHint(list);
     return;
@@ -2059,6 +2075,7 @@ function renderTable(){
       '<td class="num">'+rCell(pf.y1,true)+'</td>'+
       '<td class="num">'+rCell(pf.ytd,true)+'</td>'+
       '<td class="num">'+mddCell(pf.ytdMdd)+'</td>'+
+      '<td class="num">'+instHoldCellCompact(pf)+'</td>'+
       '<td>'+l3Tag+'</td></tr>';
   }).join('');
   document.querySelectorAll('#ptable thead th').forEach(th=>{
@@ -2109,16 +2126,17 @@ function bindTableEvents(){
 
 // ---------- 工具栏：搜索 / 自选 / 清除筛选 / 导出 CSV ----------
 function anyFilterActive(){
-  return STATE.l1!=='ALL' || STATE.l2!=='ALL' || STATE.l3!=='ALL' || !!(STATE.search||'').trim() || STATE.favOnly;
+  return STATE.l1!=='ALL' || STATE.l2!=='ALL' || STATE.l3!=='ALL' || !!(STATE.search||'').trim() || STATE.favOnly || STATE.instOnly;
 }
 function updateClearBtn(){
   const btn = document.getElementById('clearFilters'); if(!btn) return;
   btn.style.display = anyFilterActive() ? '' : 'none';
 }
 function clearAllFilters(){
-  STATE.l1='ALL'; STATE.l2='ALL'; STATE.l3='ALL'; STATE.search=''; STATE.favOnly=false;
+  STATE.l1='ALL'; STATE.l2='ALL'; STATE.l3='ALL'; STATE.search=''; STATE.favOnly=false; STATE.instOnly=false;
   const sb=document.getElementById('searchBox'); if(sb) sb.value='';
   const ft=document.getElementById('favToggle'); if(ft){ ft.classList.remove('active'); ft.textContent='☆ 自选'; }
+  const it=document.getElementById('instToggle'); if(it) it.classList.remove('active');
   document.querySelectorAll('#chipBar .chip[data-l1]').forEach(c=>c.classList.toggle('active', c.dataset.l1==='ALL'));
   renderSubChips();
   renderAll();
@@ -2126,7 +2144,7 @@ function clearAllFilters(){
 function exportCsv(){
   const list = sortedProducts(filteredProducts());
   if(!list.length){ showToast('当前没有可导出的产品。','warn'); return; }
-  const hdr = ['产品名称','代码','基金经理','一级','二级','三级','规模(亿)','昨日(%或万份收益)','近期(%或七日年化)','近一月(%)','近一年(%)','今年以来(%)','今年最大回撤(%)','是否自选'];
+  const hdr = ['产品名称','代码','基金经理','一级','二级','三级','规模(亿)','昨日(%或万份收益)','近期(%或七日年化)','近一月(%)','近一年(%)','今年以来(%)','今年最大回撤(%)','机构持仓(%)','是否自选'];
   const rows = list.map(p=>{
     const pf = DS.perfMap[p.code]||{};
     const gp = getPerf(p);
@@ -2137,6 +2155,7 @@ function exportCsv(){
     return [p.name, p.code, mgr, p.l1, p.l2, p.l3,
       (gp.scale!=null?gp.scale:''), day, wk,
       (pf.m1!=null?pf.m1:''), (pf.y1!=null?pf.y1:''), (pf.ytd!=null?pf.ytd:''), (pf.ytdMdd!=null?pf.ytdMdd:''),
+      (pf.instHold!=null?pf.instHold:''),
       isFav(p.code)?'★':''];
   });
   const esc = v => { v=(v==null?'':String(v)); return /[",\n]/.test(v) ? '"'+v.replace(/"/g,'""')+'"' : v; };
@@ -2165,6 +2184,12 @@ function bindToolbar(){
     STATE.favOnly = !STATE.favOnly;
     ft.classList.toggle('active', STATE.favOnly);
     ft.textContent = STATE.favOnly ? '★ 自选' : '☆ 自选';
+    renderAll();
+  });
+  const it = document.getElementById('instToggle');
+  if(it) it.addEventListener('click', ()=>{
+    STATE.instOnly = !STATE.instOnly;
+    it.classList.toggle('active', STATE.instOnly);
     renderAll();
   });
   const cf = document.getElementById('clearFilters');
