@@ -602,6 +602,8 @@ const CONFIG = {
   PERF_MAX_LOAD_MS:   120000         // 单批业绩加载总预算上限(ms)，超时停止补拉并标记"部分未加载"
 };
 // 业绩缓存是否仍新鲜：按日失效（同一自然日内有效）+ 7 天硬上限
+// 业绩缓存 key 前缀（含结构版本号）：perfMap 结构变更时升版本号，启动时自动清理旧版本残留（见 __startApp）
+const PERF_CACHE_PREFIX = 'zo_perf_v9:';
 function perfCacheFresh(t){
   if(!t) return false;
   if((Date.now()-t) > CONFIG.PERF_CACHE_MAX_MS) return false;
@@ -1076,7 +1078,7 @@ async function loadPerformance(code){
   if(DS.perfMap[code] && DS.perfMap[code].scale!=null && DS.perfMap[code].manager) return DS.perfMap[code];
   // localStorage 缓存：按「自然日」失效（跨日强制刷新，保证净值时效），命中则免去 pingzhongdata 请求
   try{
-    const cached = localStorage.getItem('zo_perf_v9:'+code);
+    const cached = localStorage.getItem(PERF_CACHE_PREFIX+code);
     if(cached){
       const obj = JSON.parse(cached);
       if(obj && obj.t && perfCacheFresh(obj.t) && obj.d){
@@ -1206,7 +1208,7 @@ async function loadPerformance(code){
     dwjz: mf ? null : ((lastNav && lastNav.y) ? +lastNav.y : (prev.dwjz||null)),
     jzrq: jzrqStr || prev.jzrq || null
   };
-  try{ localStorage.setItem('zo_perf_v9:'+code, JSON.stringify({t:Date.now(), d:DS.perfMap[code]})); }catch(_){}
+  try{ localStorage.setItem(PERF_CACHE_PREFIX+code, JSON.stringify({t:Date.now(), d:DS.perfMap[code]})); }catch(_){}
   return DS.perfMap[code];
 }
 
@@ -2923,6 +2925,8 @@ function closeHealthPanel(){
 // ---------- 启动 ----------
 window.__startApp = function(){
   document.getElementById('loadingOverlay').classList.add('hidden');
+  // 清理历史版本业绩缓存残留：升版后旧 zo_perf_vN 不再被读取，仅占空间且随每次升版堆积
+  try{ Object.keys(localStorage).forEach(k=>{ if(/^zo_perf_v\d+:/.test(k) && k.indexOf(PERF_CACHE_PREFIX)!==0) localStorage.removeItem(k); }); }catch(_){}
   bindThemeToggle();
   renderTopbarDate();
   buildFamilies();
