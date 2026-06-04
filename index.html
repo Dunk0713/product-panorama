@@ -317,6 +317,23 @@ body.booted .panel-table{animation:riseIn .65s cubic-bezier(.22,1,.36,1) .56s bo
 /* KPI 卡 hover：顶部渐变条更亮 */
 .kpi-card:hover::before{opacity:.85}
 
+/* ---- 焕新④：进阶质感精修 ---- */
+/* 文本选中态 → accent */
+::selection{background:var(--accent);color:#fff}
+/* 搜索框 focus 光环 */
+#searchBox:focus{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-glow)}
+.chip:focus-visible,.theme-toggle:focus-visible{outline:none;box-shadow:0 0 0 3px var(--accent-glow)}
+/* 滚动条精致化：轨道留边 + accent hover */
+::-webkit-scrollbar-thumb{background:linear-gradient(var(--bg-3),var(--bg-2));border:2px solid transparent;background-clip:padding-box;border-radius:6px}
+::-webkit-scrollbar-thumb:hover{background:var(--accent);background-clip:padding-box}
+/* chip 选中态内高光 */
+.chip.active{box-shadow:0 0 0 1px var(--green-soft),0 4px 14px var(--accent-glow),inset 0 1px 0 rgba(255,255,255,0.12)}
+/* KPI 卡玻璃顶部反光 */
+.kpi-card::after{content:'';position:absolute;top:0;left:0;right:0;height:42%;background:linear-gradient(180deg,rgba(255,255,255,0.06),transparent);pointer-events:none}
+/* 抽屉经理头像立体化：外发光 + 内描边 + 顶部高光 */
+.dr-mgr-avatar{box-shadow:0 4px 14px var(--accent-glow),inset 0 0 0 1px rgba(255,255,255,0.12);position:relative;overflow:hidden}
+.dr-mgr-avatar::after{content:'';position:absolute;inset:0;background:linear-gradient(160deg,rgba(255,255,255,0.35),transparent 55%);pointer-events:none}
+
 /* Responsive 媒体查询统一放到样式表末尾（确保覆盖后面"新增"段的基础规则，见文件尾） */
 
 /* Scrollbar */
