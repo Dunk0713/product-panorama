@@ -90,6 +90,7 @@ loadECharts(0);
   --page-grad:radial-gradient(1200px 620px at 12% -12%,rgba(0,200,83,0.07),transparent 60%),radial-gradient(1000px 520px at 88% 112%,rgba(76,205,196,0.055),transparent 60%);
   --font-ui:'Bricolage Grotesque',-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei','Helvetica Neue',Arial,sans-serif;
   --font-mono:'JetBrains Mono','SF Mono',ui-monospace,'Cascadia Code',Consolas,'PingFang SC','Microsoft YaHei',monospace;
+  --grid-line:rgba(255,255,255,0.022);
   color-scheme:dark;
 }
 /* ============ 浅色（Anthropic 暖白） ============ */
@@ -111,6 +112,7 @@ html[data-theme="light"]{
   --shadow:var(--shadow-1);
   --row-hover:rgba(40,35,25,0.05);
   --page-grad:radial-gradient(1200px 620px at 12% -12%,rgba(10,168,79,0.07),transparent 60%),radial-gradient(1000px 520px at 88% 112%,rgba(31,168,155,0.06),transparent 60%);
+  --grid-line:rgba(40,35,25,0.032);
   color-scheme:light;
 }
 *{box-sizing:border-box}
@@ -118,7 +120,7 @@ html,body{margin:0;padding:0;background:var(--bg-0);color:var(--text-1);
   font-family:var(--font-ui);
   font-size:14px;line-height:1.55;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
 html{transition:background .35s ease,color .35s ease}
-body{background-image:var(--page-grad);min-height:100vh;padding-bottom:60px;transition:background-color .35s ease}
+body{background-image:linear-gradient(var(--grid-line) 1px,transparent 1px),linear-gradient(90deg,var(--grid-line) 1px,transparent 1px),var(--page-grad);background-size:60px 60px,60px 60px,cover;background-attachment:fixed;min-height:100vh;padding-bottom:60px;transition:background-color .35s ease}
 /* 数字 / 代码 / 数据 → 等宽 JetBrains Mono；标题 / 品牌 → Bricolage Grotesque */
 .kpi-value,.ptable td.num,.ptable thead th.num,.ticker-item-val,.ticker-item-chg,.dr-metric-value,.dr-mini-chart-meta,.cell-code,.topbar-date,.src-badge,.alt-stats,.chip-count,.ds-time,.event-time{font-family:var(--font-mono)}
 .brand-title,.panel-title,.dr-name,.kpi-label,.dr-section-title,.chip-bar-label,.ticker-label,.dr-mgr-name{font-family:var(--font-ui)}
@@ -301,6 +303,19 @@ body.booted .panel-table{animation:riseIn .65s cubic-bezier(.22,1,.36,1) .56s bo
 @media (prefers-reduced-motion:reduce){
   body.booted .topbar,body.booted .ticker-bar,body.booted #chipBar,body.booted .kpi-card,body.booted .main-grid,body.booted .panel-table{animation:none}
 }
+
+/* ---- 焕新③：质感与交互精修 ---- */
+/* 顶栏上缘 accent 光线 */
+.topbar{position:relative}
+.topbar::before{content:'';position:absolute;top:0;left:0;right:0;height:1px;background:linear-gradient(90deg,transparent,var(--accent) 35%,var(--teal) 65%,transparent);opacity:.5;pointer-events:none;z-index:1}
+/* 品牌 CE 徽标：顶部高光 */
+.brand-mark{overflow:hidden}
+.brand-mark::before{content:'';position:absolute;inset:0;background:linear-gradient(160deg,rgba(255,255,255,0.42),transparent 50%);opacity:.6;pointer-events:none;z-index:1}
+.brand-mark::after{z-index:2}
+/* 表格行 hover：左侧 accent 边条 */
+.ptable tbody tr:hover{box-shadow:inset 3px 0 0 var(--accent)}
+/* KPI 卡 hover：顶部渐变条更亮 */
+.kpi-card:hover::before{opacity:.85}
 
 /* Responsive 媒体查询统一放到样式表末尾（确保覆盖后面"新增"段的基础规则，见文件尾） */
 
