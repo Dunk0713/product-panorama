@@ -286,6 +286,22 @@ body{background-image:var(--page-grad);min-height:100vh;padding-bottom:60px;tran
 .loading-text{font-size:12px;color:var(--text-3)}
 .loading-error{color:var(--red);font-size:13px;text-align:center;max-width:400px;line-height:1.6}
 
+/* ---- 首屏入场动画：分层 staggered 上浮（无 JS / reduced-motion 时正常显示）---- */
+@keyframes riseIn{from{opacity:0;transform:translateY(18px)}to{opacity:1;transform:none}}
+body.booted .topbar{animation:riseIn .55s cubic-bezier(.22,1,.36,1) both}
+body.booted .ticker-bar{animation:riseIn .55s cubic-bezier(.22,1,.36,1) .06s both}
+body.booted #chipBar{animation:riseIn .55s cubic-bezier(.22,1,.36,1) .12s both}
+body.booted .kpi-card{animation:riseIn .6s cubic-bezier(.22,1,.36,1) both}
+body.booted .kpi-grid .kpi-card:nth-child(1){animation-delay:.18s}
+body.booted .kpi-grid .kpi-card:nth-child(2){animation-delay:.25s}
+body.booted .kpi-grid .kpi-card:nth-child(3){animation-delay:.32s}
+body.booted .kpi-grid .kpi-card:nth-child(4){animation-delay:.39s}
+body.booted .main-grid{animation:riseIn .65s cubic-bezier(.22,1,.36,1) .46s both}
+body.booted .panel-table{animation:riseIn .65s cubic-bezier(.22,1,.36,1) .56s both}
+@media (prefers-reduced-motion:reduce){
+  body.booted .topbar,body.booted .ticker-bar,body.booted #chipBar,body.booted .kpi-card,body.booted .main-grid,body.booted .panel-table{animation:none}
+}
+
 /* Responsive 媒体查询统一放到样式表末尾（确保覆盖后面"新增"段的基础规则，见文件尾） */
 
 /* Scrollbar */
@@ -1776,6 +1792,19 @@ function bindSubChipsEvents(){
     });
   }
 }
+// KPI 数字 count-up（仅首屏触发一次；reduced-motion 直接设值）
+function animateCount(el, to, dur){
+  if(!el) return;
+  to = +to||0;
+  if(window.matchMedia && window.matchMedia('(prefers-reduced-motion:reduce)').matches){ el.textContent = to; return; }
+  const t0 = performance.now(), ease = t=>1-Math.pow(1-t,3);
+  (function tick(now){
+    const p = Math.min(1,(now-t0)/dur);
+    el.textContent = Math.round(to*ease(p));
+    if(p<1) requestAnimationFrame(tick); else el.textContent = to;
+  })(performance.now());
+  setTimeout(()=>{ el.textContent = to; }, dur+120); // 兜底：rAF 不触发（如后台标签）时也保证终值
+}
 function renderKpi(){
   const list = filteredProducts();
   // 总管理规模：按"基金家族"去重后求和（A+C+E... 合并后只算一次）
@@ -1814,7 +1843,8 @@ function renderKpi(){
   const healthRate = list.length ? Math.round(loadedCnt/list.length*100) : 0;
 
   document.getElementById('kpiScale').textContent = sumScale>0 ? (sumScale>=10000?fmt.num(sumScale/10000,2):fmt.num(sumScale,0)) : '--';
-  document.getElementById('kpiCount').textContent = list.length;
+  if(!window.__kpiCountAnimated){ window.__kpiCountAnimated=true; animateCount(document.getElementById('kpiCount'), list.length, 850); }
+  else document.getElementById('kpiCount').textContent = list.length;
   document.getElementById('kpiSharpe').textContent = avgY1!=null ? fmt.signed(avgY1,1)+'%' : '--';
   document.getElementById('kpiSharpeSub').textContent = withY1.length
     ? '基于 '+withY1.length+' 只已加载产品的近一年收益均值'
@@ -2980,6 +3010,9 @@ window.__startApp = function(){
     miniChart && miniChart.resize();
   });
   renderAll();
+  // 触发首屏入场动画（分层 staggered 上浮 + KPI 数字 count-up）
+  // 同步加 class：__startApp 同步执行期间浏览器不重绘，结束后首次绘制即从 animation 起始帧播放，无闪烁
+  document.body.classList.add('booted');
 
   // === 开关 ===
   const tShr = document.getElementById('toggleShares');
